@@ -1,0 +1,291 @@
+---
+title: "Fitting artificial data - Lockdown"
+output: html_document
+---
+
+#### Loading packages and source files.
+
+```{r}
+library(deSolve)
+library(dplyr)
+library(lhs)
+library(ggplot2)
+library(tibble)
+library(utils)
+library(lubridate)
+library(tidyr)
+
+
+source("ll_function_v6.R")
+source("fitting_procedure_v4.R")
+
+dyn.load("SIR.so")
+```
+
+## Artificial data - Lockdown
+
+## Fitting.
+
+Here, I try to fit a SIR model to a SIRD stochastic with a lockdown. I start easy.
+
+#### Number of threads
+
+```{r}
+
+sims <- 100 #number of "threads" to be optimized
+
+```
+
+#### Setting seed
+
+
+
+```{r}
+
+set.seed(476468713)
+
+```
+
+
+
+
+
+#### Trying to estimate lockdown with 7d data
+
+```{r}
+data <- read.csv("artificial220427.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+
+seq_pars <- data.frame(iota = rep(NA, 150 * 100), day = rep(NA, 150 * 100))
+
+
+method <- "SIRDlockdown12a_SSA-s0_N100000" #There are many options in here. Keep one
+  selected_country <- method
+
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered), 
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+
+
+
+
+seeds <- randomLHS(sims, 1)
+
+seeds <- t(seeds) * c(.5)
+
+#### Fitting
+
+pop <- country$popData2020[1]
+
+start_0 <- as.Date("2020-02-24")
+
+for(i in 0:149){
+  start <- start_0 + i
+end <- start + 6
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+devs <- sd(spl - predict(fit)$y)
+
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota")
+
+seq_pars[(1 + 100 * i):(100 + 100 * i), ] <-  
+                  temp %>% add_column(day = i)
+
+rm(temp)
+
+}
+```
+
+
+## Plotting parameters
+
+Remember that the true values for $\iota$ was $.2$.
+
+
+```{r}
+lockdown7d <- seq_pars
+save(lockdown7d, file = "lockdown7d.RData")
+ggplot(lockdown7d, aes(x = day, y = iota, group = day)) + geom_boxplot(outlier.shape = NA) 
+```
+
+
+#### Trying to estimate lockdown with 14d data
+
+```{r}
+data <- read.csv("artificial220427.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+sims <- 30 #Optimization for a single variable produce a global optimum, it seems.
+interval <- 14 #Days used for optimization
+
+seq_pars <- data.frame(iota = rep(NA, 150 * sims), day = rep(NA, 150 * sims))
+
+
+method <- "SIRDlockdown12a_SSA-s0_N100000" #There are many options in here. Keep one
+  selected_country <- method
+
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered), 
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+
+
+
+
+seeds <- randomLHS(sims, 1)
+
+seeds <- t(seeds) * c(.5)
+
+#### Fitting
+
+pop <- country$popData2020[1]
+
+start_0 <- as.Date("2020-02-24")
+
+for(i in 0:149){
+  start <- start_0 + i
+end <- start + interval - 1
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+devs <- sd(spl - predict(fit)$y)
+
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota")
+
+seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+                  temp %>% add_column(day = i)
+
+rm(temp)
+
+}
+```
+
+
+## Plotting parameters
+
+Remember that the true values for $\iota$ was $.2$.
+
+
+```{r}
+lockdown14d <- seq_pars
+save(lockdown14d, file = "lockdown14d.RData")
+ggplot(lockdown14d, aes(x = day, y = iota, group = day)) + geom_boxplot(outlier.shape = NA) 
+```
+
+#### Plotting both at the same time
+
+```{r}
+lockdown <- rbind(
+lockdown7d %>% group_by(day) %>% summarise(iota = mean(iota)) %>% add_column(Interval = "7d"),
+lockdown14d %>% group_by(day) %>% summarise(iota = mean(iota)) %>% add_column(Interval = "14d"))
+
+ggplot(lockdown, aes(day, iota, color = Interval)) + geom_line()
+```
+
+
+
+## Fit now all lockdown models
+
+
+```{r}
+data <- read.csv("artificial220510.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+unique(data$countriesAndTerritories)
+locks <- unique(data$countriesAndTerritories)[c(9, 11, 13, 77, 79, 81, 145, 147, 149)]
+
+sims <- 30 #Optimization for a single variable produce a global optimum, it seems.
+interval <- 7 #Days used for optimization
+
+seq_pars <- data.frame(iota = rep(NA, 150 * length(locks)), 
+                       day = rep(NA, 150 * length(locks)), 
+                       model = rep(NA, 150 * length(locks)))
+seeds <- randomLHS(sims, 1)
+  
+  seeds <- t(seeds) * c(.5)
+
+  
+  # There's some error here. Had to run it by hand.
+  
+#   for(x in 1:length(locks)){
+#   method <- locks[x] #There are many options in here. Keep one
+#   selected_country <- method
+#   
+#   country <-
+#     data %>% filter(countriesAndTerritories == selected_country) %>% 
+#     select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+#     mutate(infected = as.numeric(infected), recovered = as.numeric(recovered), 
+#            dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+#   
+#   #### Fitting
+#   
+#   pop <- country$popData2020[1]
+#   
+#   start_0 <- as.Date("2020-02-24")
+#   
+#   for(i in 0:149){
+#     start <- start_0 + i
+#     end <- start + interval - 1
+#     
+#     
+#     n_start <- which(country$date_new == start)
+#     n_end <- which(country$date_new == end)
+#     input <- country[n_start:n_end, ]
+#     
+#     
+#     devs <- c()
+#     spl <- (input$cases)
+#     fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+#     devs <- sd(spl - predict(fit)$y)
+#     
+#     
+#     temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+#     
+#     temp <- as.data.frame(temp)
+#     colnames(temp) <- c("iota")
+#   
+#     seq_pars[(1 + i + (x - 1) * 150), ] <-  
+#       temp %>% slice(1) %>% add_column(day = i) %>% add_column(model = locks[x])
+#     
+#     rm(temp)
+#     
+#   }
+# }
+
+```
+
+
+```{r}
+load("lockdowns.RData")
+
+ggplot(seq_pars, aes(day, iota, color = model)) + geom_line() + 
+  scale_y_continuous(limits = c(0, .5)) + theme(legend.position = "bottom")
+```
+
+

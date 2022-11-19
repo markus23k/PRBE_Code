@@ -1,0 +1,489 @@
+---
+title: "Fitting artificial data - random patterns in infection rate"
+author: Vicente J. Ontiveros
+output: ioslides_presentation
+---
+
+## Aim of these experiments
+
+ - Examine whether we are able to correctly recover the parameters of different models with a simple SIR. 
+ - Random patterns in rates.
+ - Recover a SIRD SSA with varying $\iota$.
+ 
+   1. Different seeds.
+   2. Population size.
+   3. Intensity of fluctuations.
+   
+## Some data
+```{r setup, include=FALSE}
+Sys.time()
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r Load packages and source files}
+library(deSolve)
+library(dplyr)
+library(lhs)
+library(ggplot2)
+library(tibble)
+library(utils)
+library(lubridate)
+library(tidyr)
+
+
+source("ll_function_v5.R")
+source("fitting_procedure_v3.R")
+
+dyn.load("SIR.so")
+```
+
+
+```{r Plot data}
+data <- read.csv("artificial220517.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+# data <- read.csv("artificial220427.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+selected_country <- "SIRDvaryingIota-NormalSD0.1_SSA-s0_N10000" 
+# selected_country <- "SIRD_ODE_N10000" 
+# nrow(data %>% unique())   
+country <-
+  data %>% unique() %>% filter(countriesAndTerritories == selected_country) %>%
+  select(dateRep, cases, deaths, countriesAndTerritories, popData2020) %>%
+  mutate(date_new = dmy(dateRep)) %>% arrange(date_new)
+
+ggplot(country %>% filter(date_new < dmy("23022020") + 120), aes(x = date_new)) +
+  geom_ribbon(aes(ymax = cases, ymin = 0), fill = "darkgreen", alpha = .8) +
+  geom_ribbon(aes(ymax = deaths, ymin = 0), fill = "purple", alpha = .8) +
+  theme_bw() + theme(panel.grid.minor = element_blank(), aspect.ratio = .618) +
+  ylab("Daily cases & deaths") + xlab("Date")
+```
+
+```{r}
+cat(selected_country)
+```
+
+## First try -- SD0.1 SSA-s0 N10000
+
+```{r SD0.1 SSA-s0 N10000}
+country <- country %>% slice(-1)
+
+cum_cases <- country %>% mutate(cum_cases = cumsum(cases))
+
+last20 <- country %>% select(date_new, cases) %>% 
+  filter(date_new > "2020-02-22") %>%
+  mutate(lag1 = lag(cases, 1), lag2 = lag(cases, 2), 
+                          lag3 = lag(cases, 3), lag4 = lag(cases, 4), 
+                          lag5 = lag(cases, 5), lag6 = lag(cases, 6), 
+                          lag7 = lag(cases, 7), lag8 = lag(cases, 8), 
+                          lag9 = lag(cases, 9), lag10 = lag(cases, 10), 
+                          lag11 = lag(cases, 11), lag12 = lag(cases, 12), 
+                          lag13 = lag(cases, 13), lag14 = lag(cases, 14), 
+                          lag15 = lag(cases, 15), lag16 = lag(cases, 16), 
+                          lag17 = lag(cases, 17), lag18 = lag(cases, 18), 
+                          lag19 = lag(cases, 19), lag20 = lag(cases, 20)) %>% 
+  mutate_at(3:22, replace_na, 0) %>% 
+mutate(last20 = (cases + lag1 + lag2 + lag3 + lag4 + lag5 + lag6 + lag7 + lag8 + lag9 + lag10 + lag11 + lag12 + lag13 + lag14 + lag15 + lag16 + lag17 + lag18 + lag19 + lag20)) %>% select(date_new, last20) #%>% 
+
+
+sims <- 100
+
+seeds <- randomLHS(sims, 4)
+
+seeds <- t(seeds) * c(.5, .1, 6, 1)
+
+#### Fitting
+
+pop <- country$popData2020[1]
+
+start <- as.Date("2020-02-24")
+end <- start + 120
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 15)
+devs <- sd(spl - predict(fit)$y)
+
+# plot(fit, ylim = c(0,500))
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, i_lim = 20, r_lim = 10)
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota", "rho", "Initial infected", "Initial recovered")
+
+pars <- temp %>% add_column(Method = selected_country) %>% pivot_longer(!Method, names_to = 'par', values_to = 'value')
+
+ggplot(pars, aes(x = value, color = Method)) + geom_freqpoly(bins = 100) +
+  facet_wrap(~ par, scales = "free")  +
+  theme_bw() + 
+  theme(legend.position = "none", aspect.ratio = .618, panel.grid.minor = element_blank())
+# seq_pars <- rbind(seq_pars, 
+#                   temp %>% add_column(Method = method))
+# 
+rm(temp)
+
+# ggplot(pars, aes(x = Method, y = value, groups = Method)) + geom_boxplot(outlier.shape = NA) + 
+#   facet_wrap(~ par, scales = "free_y") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+Remember that $\iota = .2$, $\rho = .02$, and $I_0 = 3$.
+
+```{r}
+save(pars, file = "SD0.1_SSA-s0_N10000.RData")
+```
+
+# Different seeds
+
+## N10000 SD0.1
+```{r}
+models <- c("SIRDvaryingIota-NormalSD0.1_SSA-s0_N10000",
+  "SIRDvaryingIota-NormalSD0.1_SSA-s1_N10000",
+            "SIRDvaryingIota-NormalSD0.1_SSA-s2_N10000",
+  "SIRDvaryingIota-NormalSD0.1_SSA-s3_N10000",
+  "SIRD_ODE_N10000")
+
+legend <- c("s0", "s1", "s2", "s3", "sd = 0")
+
+result <- vector("list", length(models))
+
+for (m in 1:length(models)){
+  selected_country <- models[m] 
+   
+country <-
+  data %>% unique() %>% filter(countriesAndTerritories == selected_country) %>%
+  select(dateRep, cases, deaths, countriesAndTerritories, popData2020, infected, recovered, dead) %>%
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered),
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+
+country <- country %>% slice(-1)
+
+
+seeds <- randomLHS(sims, 4)
+
+seeds <- t(seeds) * c(.5, .1, 6, 1)
+
+#### Fitting
+
+end <- start + 120
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 10)
+devs <- sd(spl - predict(fit)$y)
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, i_lim = 6, r_lim = 1)
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota", "rho", "Initial infected", "Initial recovered")
+
+pars <- temp %>%  add_column(Method = legend[m]) %>% pivot_longer(!Method, names_to = 'par', values_to = 'value')
+
+result[[m]] <- pars
+rm(temp)
+rm(pars)
+}
+
+# load("SD0.1_SSA-s0_N10000.RData")
+seed_effect <- rbind(result[[1]], result[[2]], result[[3]], result[[4]], result[[5]])
+
+ggplot(seed_effect, aes(x = value, color = Method)) + 
+  geom_freqpoly(bins = 100) +
+  facet_wrap(~ par, scales = "free")  +
+  theme_bw() + 
+  theme(legend.position = "bottom", aspect.ratio = .618, panel.grid.minor = element_blank()) 
+
+save(seed_effect, file = "seed_varyota.RData")
+
+### It takes less than 3 minutes to arrive here.
+```
+
+Varying $\iota$ affects the estimates.
+
+# Population size
+
+## SD0.1 SSA-s0
+
+```{r}
+models <- c("SIRDvaryingIota-NormalSD0.1_SSA-s0_N1000",
+            "SIRDvaryingIota-NormalSD0.1_SSA-s0_N100000")
+
+result <- vector("list", length(models))
+
+for (m in 1:length(models)){
+  selected_country <- models[m] 
+   
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>%
+  select(dateRep, cases, deaths, countriesAndTerritories, popData2020, infected, recovered, dead) %>%
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered),
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+country <- country %>% slice(-1)
+
+seeds <- randomLHS(sims, 4)
+
+seeds <- t(seeds) * c(.5, .1, 6, 1)
+
+#### Fitting
+
+end <- start + 120
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 15)
+devs <- sd(spl - predict(fit)$y)
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, i_lim = 20, r_lim = 10)
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota", "rho", "Initial infected", "Initial recovered")
+
+pars <- temp %>% add_column(Method = selected_country) %>% pivot_longer(!Method, names_to = 'par', values_to = 'value')
+
+result[[m]] <- pars
+rm(temp)
+rm(pars)
+}
+
+load("SD0.1_SSA-s0_N10000.RData")
+popsize_varyiota <- rbind(pars %>% add_column(popsize = 10000), 
+                     result[[1]] %>% add_column(popsize = 1000), 
+                     result[[2]] %>% add_column(popsize = 100000))
+
+ggplot(popsize_varyiota, aes(x = value, color = as.factor(popsize))) + 
+  geom_freqpoly(bins = 100) +
+  facet_wrap(~ par, scales = "free")  +
+  theme_bw() + 
+  theme(legend.position = "bottom", aspect.ratio = .618, panel.grid.minor = element_blank()) +
+  labs(color = "Population size")
+
+save(popsize_varyiota, file = "popsize_varyota.RData")
+```
+
+## Data for SD0.1 SSA-s0 N100000
+
+```{r}
+selected_country <- "SIRDvaryingIota-NormalSD0.1_SSA-s0_N100000" 
+   
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>%
+  select(dateRep, cases, deaths, countriesAndTerritories, popData2020, infected, recovered, dead) %>%
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered),
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+ggplot(country %>% filter(date_new < dmy("24022020") + 120), aes(x = date_new)) +
+  geom_ribbon(aes(ymax = cases, ymin = 0), fill = "darkgreen", alpha = .8) +
+  geom_ribbon(aes(ymax = deaths, ymin = 0), fill = "purple", alpha = .8) +
+  theme_bw() + theme(panel.grid.minor = element_blank(), aspect.ratio = .618) +
+  ylab("Daily cases & deaths") + xlab("Date")
+```
+
+Peak is a bit late.
+
+# Intensity of fluctuations
+
+## s0 N10000
+
+```{r fluctuations}
+
+data <- read.csv("artificial220529_varyingIota-Normal.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+models <- c("SIRDvaryingIota-NormalSD0.1_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.09_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.08_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.07_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.06_SSA-s0_N10000",
+            "SIRDvaryingIota-NormalSD0.05_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.04_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.03_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.02_SSA-s0_N10000",
+            "SIRDvaryingIota-NormalSD0.01_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.009_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.008_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.007_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.006_SSA-s0_N10000",
+            "SIRDvaryingIota-NormalSD0.005_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.004_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.003_SSA-s0_N10000",
+            # "SIRDvaryingIota-NormalSD0.002_SSA-s0_N10000",
+            "SIRDvaryingIota-NormalSD0.001_SSA-s0_N10000")
+
+label <- c(.1, .05, .01, .005, .001)
+
+result <- vector("list", length(models))
+
+for (m in 1:length(models)){
+  selected_country <- models[m] 
+   
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>%
+  select(dateRep, cases, deaths, countriesAndTerritories, popData2020, infected, recovered, dead) %>%
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered),
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+country <- country %>% slice(-1)
+
+seeds <- randomLHS(sims, 4)
+
+seeds <- t(seeds) * c(.5, .1, 6, 1)
+
+#### Fitting
+
+end <- start + 120
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 15)
+devs <- sd(spl - predict(fit)$y)
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, i_lim = 20, r_lim = 10)
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota", "rho", "Initial infected", "Initial recovered")
+
+pars <- temp %>% add_column(Method = label[m]) %>% pivot_longer(!Method, names_to = 'par', values_to = 'value')
+
+result[[m]] <- pars
+rm(temp)
+rm(pars)
+}
+
+# load("SD0.1_SSA-s0_N10000.RData")
+fluct_varyiota <- rbind(result[[1]], result[[2]], result[[3]],
+                        result[[4]], result[[5]])
+
+ggplot(fluct_varyiota, aes(x = value, color = as.factor(Method))) + 
+  geom_freqpoly(bins = 100) +
+  facet_wrap(~ par, scales = "free")  +
+  theme_bw() + 
+  theme(legend.position = "bottom", aspect.ratio = .618, panel.grid.minor = element_blank()) +
+  labs(color = "Sd")
+
+save(fluct_varyiota, file = "fluct_varyota.RData")
+```
+
+It ends up converging to the true values...
+
+# Least squares
+
+## Different seeds
+
+```{r}
+data <- read.csv("artificial220517.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+source("least2_function_v1.R")
+source("fitting_ls_v1.R")
+
+
+models <- c("SIRDvaryingIota-NormalSD0.1_SSA-s0_N10000",
+  "SIRDvaryingIota-NormalSD0.1_SSA-s1_N10000",
+            "SIRDvaryingIota-NormalSD0.1_SSA-s2_N10000",
+  "SIRDvaryingIota-NormalSD0.1_SSA-s3_N10000",
+  "SIRD_ODE_N10000")
+
+legend <- c("s0", "s1", "s2", "s3", "sd = 0")
+
+result <- vector("list", length(models))
+
+for (m in 1:length(models)){
+  selected_country <- models[m] 
+   
+country <-
+  data %>% unique() %>% filter(countriesAndTerritories == selected_country) %>%
+  select(dateRep, cases, deaths, countriesAndTerritories, popData2020, infected, recovered, dead) %>%
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered),
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+
+country <- country %>% slice(-1)
+
+
+seeds <- randomLHS(sims, 4)
+
+seeds <- t(seeds) * c(.5, .1, 6, 1)
+
+#### Fitting
+
+end <- start + 120
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+
+temp <- fitting_procedure(seeds = seeds, fun = ls_ode, data = input, pop = pop, i_lim = 20, r_lim = 5)
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota", "rho", "Initial infected", "Initial recovered")
+
+pars <- temp %>% add_column(Method = legend[m]) %>% pivot_longer(!Method, names_to = 'par', values_to = 'value')
+
+result[[m]] <- pars
+rm(temp)
+rm(pars)
+}
+
+seed_effect <- rbind(result[[1]], 
+                     result[[2]], result[[3]],
+                     result[[4]], result[[5]])
+
+ggplot(seed_effect, aes(x = value, color = Method)) + 
+  geom_freqpoly(bins = 100) +
+  facet_wrap(~ par, scales = "free")  +
+  theme_bw() + 
+  theme(legend.position = "bottom", aspect.ratio = .618, panel.grid.minor = element_blank())
+
+save(seed_effect, file = "seed_varyota_ls.RData")
+```
+
+## Comparing ls and smoothing
+
+```{r}
+
+load("seed_varyota.RData")
+part.a <- seed_effect %>% add_column(Fit = "smoothing")
+load("seed_varyota_ls.RData")
+part.b <- seed_effect %>% add_column(Fit = "least squares")
+ls_logl <- rbind( part.a, part.b)
+
+ggplot(ls_logl, aes(x = value, color = Method)) + 
+  geom_freqpoly(aes(linetype = Fit), bins = 100) +
+  facet_wrap(~ par, scales = "free")  +
+  theme_bw() + 
+  theme(legend.position = "bottom", aspect.ratio = .618, panel.grid.minor = element_blank())
+
+# ggplot(seed_effect, aes(x = Method, y = iota/rho, group = Method)) +
+#   geom_point()
+
+
+```
+
+Same results with both fitting procedures.
+
+# End
