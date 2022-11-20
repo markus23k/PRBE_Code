@@ -1,0 +1,151 @@
+---
+title: "Age-structure"
+author: "Vicente J. Ontiveros"
+date: "11/20/2022"
+output: ioslides_presentation
+---
+
+
+## Aim of these experiments
+
+ - Examine whether we are able to correctly recover the infectivity parameter of an age-structured SIR with a simple SIR. 
+ <!-- - Random patterns in rates. -->
+ <!-- - Recover a SIRD SSA with varying $\iota$. -->
+
+ <!--   1. Different seeds. -->
+ <!--   2. Population size. -->
+ <!--   3. Intensity of fluctuations. -->
+   
+## Let's have a look at the data 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r Load packages and source files}
+library(tidyverse)
+library(deSolve)
+# library(dplyr)
+library(lhs)
+# library(ggplot2)
+# library(tibble)
+# library(utils)
+library(lubridate)
+# library(tidyr)
+# 
+# 
+source("ll_function_v6.R")
+source("fitting_procedure_v4.R")
+source('compilation.R')
+
+dyn.load("src/SIR.so")
+```
+
+
+
+```{r Plot data}
+data <- read.csv("data/artificial221115_Age.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+# data <- read.csv("artificial220427.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+# unique(data$countriesAndTerritories)
+
+selected_country <- c("SIRDageComplexS0_SSA-s0_N10000", 
+                      "SIRDageComplexS1_SSA-s0_N10000",
+                      "SIRDageComplexS2_SSA-s0_N10000",
+                      "SIRDageComplexS3_SSA-s0_N10000")
+
+ country <-
+  data %>% filter(countriesAndTerritories %in% selected_country) %>%
+  select(dateRep, cases, deaths, countriesAndTerritories, popData2020) %>%
+  mutate(date_new = dmy(dateRep)) %>% arrange(date_new)
+
+ggplot(country %>% filter(date_new < dmy("23022020") + 120), aes(x = date_new)) +
+  geom_ribbon(aes(ymax = cases, ymin = 0), fill = "darkgreen", alpha = .8) +
+  geom_ribbon(aes(ymax = deaths, ymin = 0), fill = "purple", alpha = .8) +
+  facet_wrap(~ countriesAndTerritories) +
+  theme_bw() + theme(panel.grid.minor = element_blank(), aspect.ratio = .618) +
+  ylab("Daily cases & deaths") + xlab("Date")
+```
+
+```{r}
+# cat(selected_country)
+```
+
+## First try -- SD0.1 SSA-s0 N10000
+
+```{r SIRDageComplexS0_SSA-s0_N10000}
+selected_country <- "SIRDageComplexS0_SSA-s0_N10000"
+
+sims <- 100 #number of "threads" to be optimized
+
+set.seed(476468713)
+
+
+#### Trying to estimate lockdown with 7d data
+
+seq_pars <- data.frame(iota = rep(NA, 150 * 100), day = rep(NA, 150 * 100))
+
+country
+  
+  
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered), 
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+
+
+
+
+seeds <- randomLHS(sims, 1)
+
+seeds <- t(seeds) * c(.5)
+
+#### Fitting
+
+pop <- country$popData2020[1]
+
+start_0 <- as.Date("2020-02-24")
+
+for(i in 0:149){
+  start <- start_0 + i
+end <- start + 6
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+devs <- sd(spl - predict(fit)$y)
+
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota")
+
+seq_pars[(1 + 100 * i):(100 + 100 * i), ] <-  
+                  temp %>% add_column(day = i)
+
+rm(temp)
+
+}
+
+# country <- 
+data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  separate(infected, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(recovered, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(dead, sep = ",", letters[1:3])%>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3])
+
+```
