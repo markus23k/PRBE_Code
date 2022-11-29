@@ -8,15 +8,23 @@ output: ioslides_presentation
 
 ## Aim of these experiments
 
+- Recover a time-varying infectivity parameter in an age-structured SIR with a simple SIR.
 - Develop an expert system that detects structural changes.
- - Examine whether we are able to correctly recover an time-varying infectivity parameter in an age-structured SIR with a simple SIR. 
+  
  <!-- - Random patterns in rates. -->
  <!-- - Recover a SIRD SSA with varying $\iota$. -->
 
- <!--   1. Different seeds. -->
- <!--   2. Population size. -->
- <!--   3. Intensity of fluctuations. -->
-   
+----
+**Algorithm**: Moving windows.
+----
+
+1. Set up initial values for the parameter.
+2. For a given window length, estimate the parameters of the model.
+3. Set up the parameters as the new initial values.
+4. Move the window a given step length. 
+5. Repeat 2-4 until a desired condition. 
+
+
 ## Let's have a look at the data 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
@@ -32,8 +40,8 @@ library(lhs)
 # library(utils)
 library(lubridate)
 # library(tidyr)
-# 
-# 
+library(strucchange)
+
 source("ll_function_v6.R")
 source("R/fitting_procedure_v5.R")
 source('compilation.R')
@@ -246,9 +254,48 @@ ggplot(scenarios, aes(day, iota, color = N)) + geom_line() +
 
 Variability decreases with N. Remember $\iota = .2$
 
+## Structural breaks in infectivity. 
+
+_Chow test_. 
+
+We split the data in two groups:
+
+$$
+y_t=a_1+b_1x_{1t} + c_1x_{2t} + \varepsilon \, 
+$$
+
+$$
+y_t=a_2+b_2x_{1t} + c_2x_{2t} + \varepsilon
+$$
+
+So, our null hypothesis is $a_1=a_2$, $b_1=b_2$, and $c_1=c_2$.
+
+The test statistic follows an F-distribution with $N - 2k$ d.o.f.     
+
+## Example -- S0_SSA-s0_N10000
+
+```{r}
+
+statistic <- rep(NA, 70)
+data <- lockdown7d %>% group_by(day) %>% summarise(iota = mean(iota)) %>% as.data.frame()
+
+for(i in 7:64){
+  statistic[i] <- (sctest(data$iota ~ data$day,
+               type = 'Chow', point = i))$statistic
+}
+
+
+ggplot(data %>% add_column(statistic), aes(x = day, y = iota)) +
+  geom_point() +
+  geom_line(aes(y = statistic/1700), color = 'red') + theme_bw()
+
+```
+
+Red line -- statistic.
 
 ## Next step
 
+- Continue with the structural changes in infectivity.
 - Explore the effect of window length. 
 - Evaluate goodness of fit/prediction. 
 - Now, parameters are equal for all ages. What if we have parameters that are not equal and changing?
