@@ -460,7 +460,331 @@ On the infectivities.
 - Incorporating the breakpoint in parameter estimation also helps us find the structural change.
 - Chow tests in the infectivity series do not give exact information on when the change happened. 
 
-- Smaller drops? How to detect them automatically?
+
+## What about smaller drops?
+
+```{r}
+data <- read.csv("data/artificial230207_Age2.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+# unique(data$countriesAndTerritories)
+selected_country <- "SIRDageComplex-IotaScale0.5-S0_SSA-s0_N10000"
+
+sims <- 3 #number of "threads" to be optimized
+days <- 70 #number of jumps of the timestep
+
+set.seed(476468713)
+
+
+#### Trying to estimate lockdown with 7d data
+
+seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+
+# country
+  
+  
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  separate(infected, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(recovered, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(dead, sep = ",", letters[1:3])%>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3]) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(date_new = dmy(dateRep)) %>% arrange(date_new)
+
+seeds <- randomLHS(sims, 1)
+
+seeds <- t(seeds) * c(.5)
+
+#### Fitting
+
+pop <- country$popData2020[1]
+
+start_0 <- as.Date("2020-02-24")
+
+for(i in 0:(days - 1)){
+  start <- start_0 + i
+end <- start + 6
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+devs <- sd(spl - predict(fit)$y)
+
+if(devs < .5) devs <- 1
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota")
+
+seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+                  temp %>% add_column(day = i)
+
+rm(temp)
+
+}
+
+lockdown7d <- seq_pars
+# save(lockdown7d, file = "lockdown7d.RData")
+ggplot(lockdown7d %>% unique(), aes(x = day, y = iota)) +
+  # geom_boxplot(outlier.shape = NA)
+  geom_line() + theme_bw() +
+  theme(aspect.ratio = .618, panel.grid.minor = element_blank()) +
+  scale_y_continuous(limits = c(0, NA))
+```
+
+Let's try with a iota reduction of .5, 7d window.
+
+## Window length reveals lockdown
+```{r}
+wl.df <- data.frame()
+
+for(wl in 5:21){
+  seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+  
+  #### Fitting
+  
+  start_0 <- as.Date("2020-02-24")
+  
+  for(i in 0:(days - 1)){
+    start <- start_0 + i
+    end <- start + wl - 1
+    
+    n_start <- which(country$date_new == start)
+    n_end <- which(country$date_new == end)
+    input <- country[n_start:n_end, ]
+    
+    devs <- c()
+    spl <- (input$cases)
+    fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+    devs <- sd(spl - predict(fit)$y)
+    
+    if(devs < .5) devs <- 1
+    
+    temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+    
+    temp <- as.data.frame(temp)
+    colnames(temp) <- c("iota")
+    
+    seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+      temp %>% add_column(day = i)
+    
+    
+    rm(temp)
+    
+  }
+seq_pars <- seq_pars %>% add_column(Window.length = wl)
+  wl.df <- rbind(wl.df, seq_pars)
+}
+
+wl.df <- wl.df %>% unique()
+
+ggplot(wl.df, aes(x = day, y = iota, group = Window.length, color = Window.length)) + 
+  geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) +
+  geom_vline(xintercept = 30)
+```
+
+The lockdown started on day 30. Iota factor .5
+
+## Let's see with lesser drops (I)
+
+```{r}
+data <- read.csv("data/artificial230207_Age2.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+selected_country <- "SIRDageComplex-IotaScale0.75-S0_SSA-s0_N10000"
+
+sims <- 3 #number of "threads" to be optimized
+days <- 70 #number of jumps of the timestep
+
+set.seed(476468713)
+
+
+#### Trying to estimate lockdown with 7d data
+
+seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+
+# country
+  
+  
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  separate(infected, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(recovered, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(dead, sep = ",", letters[1:3])%>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3]) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(date_new = dmy(dateRep)) %>% arrange(date_new)
+
+seeds <- randomLHS(sims, 1)
+
+seeds <- t(seeds) * c(.5)
+
+wl.df <- data.frame()
+
+for(wl in 5:21){
+  seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+  
+  #### Fitting
+  
+  start_0 <- as.Date("2020-02-24")
+  
+  for(i in 0:(days - 1)){
+    start <- start_0 + i
+    end <- start + wl - 1
+    
+    n_start <- which(country$date_new == start)
+    n_end <- which(country$date_new == end)
+    input <- country[n_start:n_end, ]
+    
+    devs <- c()
+    spl <- (input$cases)
+    fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+    devs <- sd(spl - predict(fit)$y)
+    
+    if(devs < .5) devs <- 1
+    
+    temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+    
+    temp <- as.data.frame(temp)
+    colnames(temp) <- c("iota")
+    
+    seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+      temp %>% add_column(day = i)
+    
+    
+    rm(temp)
+    
+  }
+seq_pars <- seq_pars %>% add_column(Window.length = wl)
+  wl.df <- rbind(wl.df, seq_pars)
+}
+
+wl.df <- wl.df %>% unique()
+
+ggplot(wl.df, aes(x = day, y = iota, group = Window.length, color = Window.length)) + 
+  geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) +
+  geom_vline(xintercept = 30)
+
+```
+
+There's a bit more variance now. Factor .75
+
+
+## Let's see with lesser drops (II)
+
+```{r}
+data <- read.csv("data/artificial230207_Age2.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+selected_country <- "SIRDageComplex-IotaScale0.875-S0_SSA-s0_N10000"
+
+sims <- 3 #number of "threads" to be optimized
+days <- 70 #number of jumps of the timestep
+
+set.seed(476468713)
+
+
+#### Trying to estimate lockdown with 7d data
+
+seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+
+# country
+  
+  
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  separate(infected, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(recovered, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(dead, sep = ",", letters[1:3])%>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3]) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(date_new = dmy(dateRep)) %>% arrange(date_new)
+
+seeds <- randomLHS(sims, 1)
+
+seeds <- t(seeds) * c(.5)
+
+wl.df <- data.frame()
+
+for(wl in 5:21){
+  seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+  
+  #### Fitting
+  
+  start_0 <- as.Date("2020-02-24")
+  
+  for(i in 0:(days - 1)){
+    start <- start_0 + i
+    end <- start + wl - 1
+    
+    n_start <- which(country$date_new == start)
+    n_end <- which(country$date_new == end)
+    input <- country[n_start:n_end, ]
+    
+    devs <- c()
+    spl <- (input$cases)
+    fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+    devs <- sd(spl - predict(fit)$y)
+    
+    if(devs < .5) devs <- 1
+    
+    temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+    
+    temp <- as.data.frame(temp)
+    colnames(temp) <- c("iota")
+    
+    seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+      temp %>% add_column(day = i)
+    
+    
+    rm(temp)
+    
+  }
+seq_pars <- seq_pars %>% add_column(Window.length = wl)
+  wl.df <- rbind(wl.df, seq_pars)
+}
+
+wl.df <- wl.df %>% unique()
+
+ggplot(wl.df, aes(x = day, y = iota, group = Window.length, color = Window.length)) + 
+  geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) +
+  geom_vline(xintercept = 30)
+
+```
+
+It's more difficult to see the exact day of the lockdown. Factor .875
+
+```{r}
+# ggplot(wl.df %>% group_by(day) %>% summarise(sd = sd(iota)), aes(x = day, y = sd)) + 
+#   geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) +
+#   geom_vline(xintercept = 30)
+```
+
+
+## More open questions
 - What about goodness of fit/prediction?
 - More unknown parameters?
 
