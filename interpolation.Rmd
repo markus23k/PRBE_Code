@@ -1,0 +1,704 @@
+---
+title: "Slow change in infectivity"
+author: "Vicente J. Ontiveros"
+date: "21/03/2023"
+output: ioslides_presentation
+---
+
+
+## Aim of these experiments
+
+- Recover a time-varying infectivity parameter in an age-structured SIR with a simple SIR.
+- Develop an expert system that detects structural changes.
+- In this case, there is an interpolation on the infectivity from one level to another, during 16 days.
+  
+ <!-- - Random patterns in rates. -->
+ <!-- - Recover a SIRD SSA with varying $\iota$. -->
+
+----
+**Algorithm**: Moving windows.
+----
+
+1. Set up initial values for the parameter.
+2. For a given window length, estimate the parameters of the model.
+3. Set up the parameters as the new initial values.
+4. Move the window a given step length. 
+5. Repeat 2-4 until a desired condition. 
+
+
+## Let's have a look at the data 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r Load packages and source files}
+library(tidyverse)
+library(deSolve)
+# library(dplyr)
+library(lhs)
+# library(ggplot2)
+# library(tibble)
+# library(utils)
+library(lubridate)
+# library(tidyr)
+library(strucchange)
+
+source("ll_function_v6.R")
+source("R/fitting_procedure_v5.R")
+source('compilation.R')
+
+dyn.load("src/SIR.so")
+```
+
+
+
+```{r Plot data}
+data <- read.csv("data/artificial230207_Age2.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+# data <- read.csv("artificial220427.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+# unique(data$countriesAndTerritories)
+
+selected_country <- c("SIRDageComplex-IotaScale0.5-S0_SSA-s0_N100000", 
+                      "SIRDageComplex-IotaScale0.5-S1_SSA-s0_N100000",
+                      "SIRDageComplex-IotaScale0.5-S2_SSA-s0_N100000",
+                      "SIRDageComplex-IotaScale0.5-S3_SSA-s0_N100000")
+
+ country <-
+  data %>% filter(countriesAndTerritories %in% selected_country) %>%
+  select(dateRep, cases, deaths, countriesAndTerritories, popData2020) %>%
+  mutate(date_new = dmy(dateRep)) %>% arrange(date_new)
+
+ggplot(country %>% filter(date_new < dmy("23022020") + 120), aes(x = date_new)) +
+  geom_ribbon(aes(ymax = cases, ymin = 0), fill = "darkgreen", alpha = .8) +
+  geom_ribbon(aes(ymax = deaths, ymin = 0), fill = "purple", alpha = .8) +
+  facet_wrap(~ countriesAndTerritories) +
+  theme_bw() + theme(panel.grid.minor = element_blank(), aspect.ratio = .618) +
+  ylab("Daily cases & deaths") + xlab("Date")
+```
+
+S{0, 1, 2, 3} differ on the length of the reduction in infectivity.
+
+## SIRDageComplex-IotaScale0.5-S3_SSA-s0_N100000
+
+```{r SIRDageComplexS1_SSA-s0_N10000}
+selected_country <- "SIRDageComplex-IotaScale0.5-S3_SSA-s0_N100000"
+
+sims <- 3 #number of "threads" to be optimized
+days <- 70 #number of jumps of the timestep
+
+set.seed(476468713)
+
+
+#### Trying to estimate lockdown with 7d data
+
+seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+
+# country
+  
+  
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  separate(infected, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(recovered, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(dead, sep = ",", letters[1:3])%>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3]) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(date_new = dmy(dateRep)) %>% arrange(date_new)
+
+seeds <- randomLHS(sims, 1)
+
+seeds <- t(seeds) * c(.5)
+
+#### Fitting
+
+pop <- country$popData2020[1]
+
+start_0 <- as.Date("2020-02-24")
+
+for(i in 0:(days - 1)){
+  start <- start_0 + i
+end <- start + 6
+
+
+  n_start <- which(country$date_new == start)
+  n_end <- which(country$date_new == end)
+  input <- country[n_start:n_end, ]
+ 
+  
+  devs <- c()
+spl <- (input$cases)
+fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+devs <- sd(spl - predict(fit)$y)
+
+if(devs < .5) devs <- 1
+
+temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+
+temp <- as.data.frame(temp)
+colnames(temp) <- c("iota")
+
+seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+                  temp %>% add_column(day = i)
+
+rm(temp)
+
+}
+
+lockdown7d <- seq_pars
+# save(lockdown7d, file = "lockdown7d.RData")
+ggplot(lockdown7d %>% unique(), aes(x = day + 1, y = iota)) +
+   geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
+  # geom_boxplot(outlier.shape = NA)
+  geom_line() + theme_bw() +
+  theme(aspect.ratio = .618, panel.grid.minor = element_blank()) +
+  xlab("Day")
+```
+
+Daily re-parametrization. Window length = 7d.
+
+
+## Structural breaks in infectivity. 
+
+_Chow test_. 
+
+We split the data in two groups:
+
+$$
+y_t=a_1+b_1x_{1t} + c_1x_{2t} + \varepsilon \, 
+$$
+
+$$
+y_t=a_2+b_2x_{1t} + c_2x_{2t} + \varepsilon
+$$
+
+So, our null hypothesis is $a_1=a_2$, $b_1=b_2$, and $c_1=c_2$.
+
+The test statistic follows an F-distribution with $N - 2k$ d.o.f.     
+
+## Effect of window length
+
+```{r}
+selected_country <- "SIRDageComplex-IotaScale0.5-S3_SSA-s0_N100000"
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  separate(infected, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(recovered, sep = ",", letters[1:3]) %>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% 
+  separate(dead, sep = ",", letters[1:3])%>% 
+  mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2), 
+         dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3]) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(date_new = dmy(dateRep)) %>% arrange(date_new)
+
+sims <- 3 #number of "threads" to be optimized
+days <- 70 #number of jumps of the timestep
+
+seeds <- randomLHS(sims, 1)
+seeds <- t(seeds) * c(.5)
+set.seed(476468713)
+pop <- country$popData2020[1]
+
+wl.df <- data.frame()
+
+for(wl in 5:21){
+  seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+  
+  #### Fitting
+  
+  start_0 <- as.Date("2020-02-24")
+  
+  for(i in 0:(days - 1)){
+    start <- start_0 + i
+    end <- start + wl - 1
+    
+    n_start <- which(country$date_new == start)
+    n_end <- which(country$date_new == end)
+    input <- country[n_start:n_end, ]
+    
+    devs <- c()
+    spl <- (input$cases)
+    fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+    devs <- sd(spl - predict(fit)$y)
+    
+    if(devs < .5) devs <- 1
+    
+    temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+    
+    temp <- as.data.frame(temp)
+    colnames(temp) <- c("iota")
+    
+    seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+      temp %>% add_column(day = i)
+    
+    
+    rm(temp)
+    
+  }
+seq_pars <- seq_pars %>% add_column(Window.length = wl)
+  wl.df <- rbind(wl.df, seq_pars)
+}
+
+wl.df <- wl.df %>% unique()
+
+ggplot(wl.df, aes(x = day + 1, y = iota, group = Window.length, color = Window.length)) + 
+   geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
+  geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) +
+  xlab("Day")
+
+```
+
+## Chow-test
+
+```{r}
+
+chow.df <- data.frame()
+
+for(wl in 5:21){
+  statistic <- rep(NA, 70)
+data <- wl.df %>% filter(Window.length == wl) %>% group_by(day) %>% summarise(iota = mean(iota)) %>% as.data.frame()
+
+for(i in 7:64){
+  statistic[i] <- (sctest(data$iota ~ data$day,
+               type = 'Chow', point = i))$statistic
+}
+
+temp <- data %>% add_column(statistic) %>% add_column(wl = wl)
+chow.df <- rbind(chow.df, temp)
+}
+
+
+
+ggplot(chow.df, aes(x = day + 1, y = statistic, group = wl, color = wl)) +
+  geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
+  geom_line() + theme_bw() 
+  
+```
+
+On the infectivities.
+
+## Standard deviation of estimates
+
+```{r}
+ggplot(wl.df %>% group_by(day) %>% summarise(sd = sd(iota)), aes(x = day + 1, y = sd)) +  
+geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) + 
+geom_vline(xintercept = 38) + xlab("Day")
+
+```
+
+## Chow test of the sd
+
+```{r}
+# wl.df %>% group_by(day) %>% summarise(sd = sd(iota))
+
+chow.df <- data.frame()
+
+data <- wl.df %>% group_by(day) %>% summarise(sd = sd(iota)) %>% as.data.frame()
+
+for(i in 7:64){
+  statistic[i] <- (sctest(data$sd ~ data$day,
+               type = 'Chow', point = i))$statistic
+}
+
+temp <- data %>% add_column(statistic)
+
+
+temp2 <- data.frame()
+for(i in 7:64){
+  for(wl in 5:20){
+    if((i - wl) < 1) next
+    if((i + wl) > 70) next
+    temp_data <- data %>% slice((i - wl):(i + wl))
+    chow <- (sctest(temp_data$sd ~ temp_data$day,
+               type = 'Chow', point = (wl + 1)))$statistic
+    temp2 <- rbind(temp2, data.frame(Focal = i, wl = wl, statistic = chow))
+  }
+}
+# temp2
+
+ggplot(temp, aes(x = day + 1, y = statistic)) +
+  geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
+  geom_line() + theme_bw() +
+  # geom_vline(xintercept = 30) +
+  xlab("Day")
+```
+
+## Moving windows of the sd
+
+```{r}
+ggplot(temp2, aes(x = Focal, y = statistic, color = wl, group = wl)) +
+  geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
+  geom_line() + theme_bw() +
+  # geom_vline(xintercept = 30) +
+  xlab("Day")
+```
+
+## S.d. of the Chow statistic
+
+```{r}
+ggplot(temp2 %>% group_by(Focal) %>% summarise(Sd = sd(statistic)), aes(x = Focal, y = Sd)) +
+  geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
+  geom_line() + theme_bw() +
+  # geom_vline(xintercept = 30) +
+  xlab("Day") + ylab("S.d. of the Chow statistic")
+
+```
+
+The reduction in infectivity started day 22 and ended day 38. 
+
+<!-- ## Mean absolute scaled error -->
+
+<!-- ```{r} -->
+<!-- country %>% slice(-1) %>% select(2) %>% c() %>% unlist() %>% unname() %>% diff() %>% abs() %>% hist(breaks = 10) -->
+
+<!-- ``` -->
+
+
+<!-- ## Findings so far -->
+
+<!-- - For this simple setting, the moving window suffices to find the structural change.  -->
+<!-- - Incorporating the breakpoint in parameter estimation also helps us find the structural change. -->
+<!-- - Chow tests in the infectivity series do not give exact information on when the change happened.  -->
+
+
+<!-- ## What about smaller drops? -->
+
+<!-- ```{r} -->
+<!-- data <- read.csv("data/artificial230207_Age2.csv", na.strings = "", fileEncoding = "UTF-8-BOM") -->
+
+<!-- # unique(data$countriesAndTerritories) -->
+<!-- selected_country <- "SIRDageComplex-IotaScale0.5-S0_SSA-s0_N10000" -->
+
+<!-- sims <- 3 #number of "threads" to be optimized -->
+<!-- days <- 70 #number of jumps of the timestep -->
+
+<!-- set.seed(476468713) -->
+
+
+<!-- #### Trying to estimate lockdown with 7d data -->
+
+<!-- seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days)) -->
+
+<!-- # country -->
+
+
+<!-- country <- -->
+<!--   data %>% filter(countriesAndTerritories == selected_country) %>%  -->
+<!--   select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>%  -->
+<!--   separate(infected, sep = ",", letters[1:3]) %>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>%  -->
+<!--   separate(recovered, sep = ",", letters[1:3]) %>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>%  -->
+<!--   separate(dead, sep = ",", letters[1:3])%>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3]) %>%  -->
+<!--   select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>%  -->
+<!--   mutate(date_new = dmy(dateRep)) %>% arrange(date_new) -->
+
+<!-- seeds <- randomLHS(sims, 1) -->
+
+<!-- seeds <- t(seeds) * c(.5) -->
+
+<!-- #### Fitting -->
+
+<!-- pop <- country$popData2020[1] -->
+
+<!-- start_0 <- as.Date("2020-02-24") -->
+
+<!-- for(i in 0:(days - 1)){ -->
+<!--   start <- start_0 + i -->
+<!-- end <- start + 6 -->
+
+
+<!--   n_start <- which(country$date_new == start) -->
+<!--   n_end <- which(country$date_new == end) -->
+<!--   input <- country[n_start:n_end, ] -->
+
+
+<!--   devs <- c() -->
+<!-- spl <- (input$cases) -->
+<!-- fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4) -->
+<!-- devs <- sd(spl - predict(fit)$y) -->
+
+<!-- if(devs < .5) devs <- 1 -->
+
+<!-- temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1]) -->
+
+<!-- temp <- as.data.frame(temp) -->
+<!-- colnames(temp) <- c("iota") -->
+
+<!-- seq_pars[(1 + sims * i):(sims + sims * i), ] <-   -->
+<!--                   temp %>% add_column(day = i) -->
+
+<!-- rm(temp) -->
+
+<!-- } -->
+
+<!-- lockdown7d <- seq_pars -->
+<!-- # save(lockdown7d, file = "lockdown7d.RData") -->
+<!-- ggplot(lockdown7d %>% unique(), aes(x = day, y = iota)) + -->
+<!--   # geom_boxplot(outlier.shape = NA) -->
+<!--   geom_line() + theme_bw() + -->
+<!--   theme(aspect.ratio = .618, panel.grid.minor = element_blank()) + -->
+<!--   scale_y_continuous(limits = c(0, NA)) -->
+<!-- ``` -->
+
+<!-- Let's try with a iota reduction of .5, 7d window. -->
+
+<!-- ## Window length reveals lockdown -->
+<!-- ```{r} -->
+<!-- wl.df <- data.frame() -->
+
+<!-- for(wl in 5:21){ -->
+<!--   seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days)) -->
+
+<!--   #### Fitting -->
+
+<!--   start_0 <- as.Date("2020-02-24") -->
+
+<!--   for(i in 0:(days - 1)){ -->
+<!--     start <- start_0 + i -->
+<!--     end <- start + wl - 1 -->
+
+<!--     n_start <- which(country$date_new == start) -->
+<!--     n_end <- which(country$date_new == end) -->
+<!--     input <- country[n_start:n_end, ] -->
+
+<!--     devs <- c() -->
+<!--     spl <- (input$cases) -->
+<!--     fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4) -->
+<!--     devs <- sd(spl - predict(fit)$y) -->
+
+<!--     if(devs < .5) devs <- 1 -->
+
+<!--     temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1]) -->
+
+<!--     temp <- as.data.frame(temp) -->
+<!--     colnames(temp) <- c("iota") -->
+
+<!--     seq_pars[(1 + sims * i):(sims + sims * i), ] <-   -->
+<!--       temp %>% add_column(day = i) -->
+
+
+<!--     rm(temp) -->
+
+<!--   } -->
+<!-- seq_pars <- seq_pars %>% add_column(Window.length = wl) -->
+<!--   wl.df <- rbind(wl.df, seq_pars) -->
+<!-- } -->
+
+<!-- wl.df <- wl.df %>% unique() -->
+
+<!-- ggplot(wl.df, aes(x = day, y = iota, group = Window.length, color = Window.length)) +  -->
+<!--   geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) + -->
+<!--   geom_vline(xintercept = 30) -->
+<!-- ``` -->
+
+<!-- The lockdown started on day 30. Iota factor .5 -->
+
+<!-- ## Let's see with lesser drops (I) -->
+
+<!-- ```{r} -->
+<!-- data <- read.csv("data/artificial230207_Age2.csv", na.strings = "", fileEncoding = "UTF-8-BOM") -->
+
+<!-- selected_country <- "SIRDageComplex-IotaScale0.75-S0_SSA-s0_N10000" -->
+
+<!-- sims <- 3 #number of "threads" to be optimized -->
+<!-- days <- 70 #number of jumps of the timestep -->
+
+<!-- set.seed(476468713) -->
+
+
+<!-- #### Trying to estimate lockdown with 7d data -->
+
+<!-- seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days)) -->
+
+<!-- # country -->
+
+
+<!-- country <- -->
+<!--   data %>% filter(countriesAndTerritories == selected_country) %>%  -->
+<!--   select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>%  -->
+<!--   separate(infected, sep = ",", letters[1:3]) %>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>%  -->
+<!--   separate(recovered, sep = ",", letters[1:3]) %>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>%  -->
+<!--   separate(dead, sep = ",", letters[1:3])%>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3]) %>%  -->
+<!--   select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>%  -->
+<!--   mutate(date_new = dmy(dateRep)) %>% arrange(date_new) -->
+
+<!-- seeds <- randomLHS(sims, 1) -->
+
+<!-- seeds <- t(seeds) * c(.5) -->
+
+<!-- wl.df <- data.frame() -->
+
+<!-- for(wl in 5:21){ -->
+<!--   seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days)) -->
+
+<!--   #### Fitting -->
+
+<!--   start_0 <- as.Date("2020-02-24") -->
+
+<!--   for(i in 0:(days - 1)){ -->
+<!--     start <- start_0 + i -->
+<!--     end <- start + wl - 1 -->
+
+<!--     n_start <- which(country$date_new == start) -->
+<!--     n_end <- which(country$date_new == end) -->
+<!--     input <- country[n_start:n_end, ] -->
+
+<!--     devs <- c() -->
+<!--     spl <- (input$cases) -->
+<!--     fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4) -->
+<!--     devs <- sd(spl - predict(fit)$y) -->
+
+<!--     if(devs < .5) devs <- 1 -->
+
+<!--     temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1]) -->
+
+<!--     temp <- as.data.frame(temp) -->
+<!--     colnames(temp) <- c("iota") -->
+
+<!--     seq_pars[(1 + sims * i):(sims + sims * i), ] <-   -->
+<!--       temp %>% add_column(day = i) -->
+
+
+<!--     rm(temp) -->
+
+<!--   } -->
+<!-- seq_pars <- seq_pars %>% add_column(Window.length = wl) -->
+<!--   wl.df <- rbind(wl.df, seq_pars) -->
+<!-- } -->
+
+<!-- wl.df <- wl.df %>% unique() -->
+
+<!-- ggplot(wl.df, aes(x = day, y = iota, group = Window.length, color = Window.length)) +  -->
+<!--   geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) + -->
+<!--   geom_vline(xintercept = 30) -->
+
+<!-- ``` -->
+
+<!-- There's a bit more variance now. Factor .75 -->
+
+
+<!-- ## Let's see with lesser drops (II) -->
+
+<!-- ```{r} -->
+<!-- data <- read.csv("data/artificial230207_Age2.csv", na.strings = "", fileEncoding = "UTF-8-BOM") -->
+
+<!-- selected_country <- "SIRDageComplex-IotaScale0.875-S0_SSA-s0_N10000" -->
+
+<!-- sims <- 3 #number of "threads" to be optimized -->
+<!-- days <- 70 #number of jumps of the timestep -->
+
+<!-- set.seed(476468713) -->
+
+
+<!-- #### Trying to estimate lockdown with 7d data -->
+
+<!-- seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days)) -->
+
+<!-- # country -->
+
+
+<!-- country <- -->
+<!--   data %>% filter(countriesAndTerritories == selected_country) %>%  -->
+<!--   select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>%  -->
+<!--   separate(infected, sep = ",", letters[1:3]) %>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          infected = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>%  -->
+<!--   separate(recovered, sep = ",", letters[1:3]) %>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          recovered = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>%  -->
+<!--   separate(dead, sep = ",", letters[1:3])%>%  -->
+<!--   mutate(a = str_sub(a, start = 2), c = str_sub(c, end = -2),  -->
+<!--          dead = as.numeric(a) + as.numeric(b) + as.numeric(c)) %>% select(-letters[1:3]) %>%  -->
+<!--   select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>%  -->
+<!--   mutate(date_new = dmy(dateRep)) %>% arrange(date_new) -->
+
+<!-- seeds <- randomLHS(sims, 1) -->
+
+<!-- seeds <- t(seeds) * c(.5) -->
+
+<!-- wl.df <- data.frame() -->
+
+<!-- for(wl in 5:21){ -->
+<!--   seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days)) -->
+
+<!--   #### Fitting -->
+
+<!--   start_0 <- as.Date("2020-02-24") -->
+
+<!--   for(i in 0:(days - 1)){ -->
+<!--     start <- start_0 + i -->
+<!--     end <- start + wl - 1 -->
+
+<!--     n_start <- which(country$date_new == start) -->
+<!--     n_end <- which(country$date_new == end) -->
+<!--     input <- country[n_start:n_end, ] -->
+
+<!--     devs <- c() -->
+<!--     spl <- (input$cases) -->
+<!--     fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4) -->
+<!--     devs <- sd(spl - predict(fit)$y) -->
+
+<!--     if(devs < .5) devs <- 1 -->
+
+<!--     temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1]) -->
+
+<!--     temp <- as.data.frame(temp) -->
+<!--     colnames(temp) <- c("iota") -->
+
+<!--     seq_pars[(1 + sims * i):(sims + sims * i), ] <-   -->
+<!--       temp %>% add_column(day = i) -->
+
+
+<!--     rm(temp) -->
+
+<!--   } -->
+<!-- seq_pars <- seq_pars %>% add_column(Window.length = wl) -->
+<!--   wl.df <- rbind(wl.df, seq_pars) -->
+<!-- } -->
+
+<!-- wl.df <- wl.df %>% unique() -->
+
+<!-- ggplot(wl.df, aes(x = day, y = iota, group = Window.length, color = Window.length)) +  -->
+<!--   geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) + -->
+<!--   geom_vline(xintercept = 30) -->
+
+<!-- ``` -->
+
+<!-- It's more difficult to see the exact day of the lockdown. Factor .875 -->
+
+<!-- ```{r} -->
+<!-- # ggplot(wl.df %>% group_by(day) %>% summarise(sd = sd(iota)), aes(x = day, y = sd)) +  -->
+<!-- #   geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) + -->
+<!-- #   geom_vline(xintercept = 30) -->
+<!-- ``` -->
+
+
+## More open questions
+- What about goodness of fit/prediction?
+- More unknown parameters?
+
+## Next step
+
+- Evaluate goodness of fit/prediction. 
+- Now, parameters are equal for all ages. What if we have parameters that are not equal and changing?
+
