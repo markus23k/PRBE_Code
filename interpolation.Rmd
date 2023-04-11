@@ -184,7 +184,7 @@ The test statistic follows an F-distribution with $N - 2k$ d.o.f.
 ## Effect of window length
 
 ```{r}
-selected_country <- "SIRDageComplex-IotaScale0.5-S3_SSA-s0_N100000"
+selected_country <- "SIRDageComplex-IotaScale0.5-S0_SSA-s0_N100000"
 country <-
   data %>% filter(countriesAndTerritories == selected_country) %>% 
   select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
@@ -345,7 +345,7 @@ ggplot(temp2, aes(x = Focal, y = statistic, color = wl, group = wl)) +
 ## S.d. of the Chow statistic
 
 ```{r}
-ggplot(temp2 %>% group_by(Focal) %>% summarise(Sd = sd(statistic)), aes(x = Focal, y = Sd)) +
+ggplot(temp2 %>% group_by(Focal) %>% summarise(Sd = mean(statistic)), aes(x = Focal + 1, y = Sd)) +
   geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
   geom_line() + theme_bw() +
   # geom_vline(xintercept = 30) +
@@ -354,6 +354,18 @@ ggplot(temp2 %>% group_by(Focal) %>% summarise(Sd = sd(statistic)), aes(x = Foca
 ```
 
 The reduction in infectivity started day 22 and ended day 38. 
+
+<!-- ## Another idea -->
+<!-- ```{r} -->
+
+<!-- wl.df2 <- wl.df %>% mutate(day = day + Window.length) -->
+<!-- wl.df3 <- rbind(wl.df, wl.df2) -->
+
+<!-- ggplot(wl.df3 %>% group_by(day) %>% summarise(iota = sd(iota)), aes(x = day, y = iota)) + geom_line() -->
+
+<!-- ``` -->
+
+
 
 <!-- ## Mean absolute scaled error -->
 
