@@ -425,3 +425,438 @@ ggplot(temp2, aes(x = Focal, y = statistic, color = wl, group = wl)) +
   xlab("Day")
 ```
 
+# Checking the second example
+
+## Aim
+
+Try to separate between the effect of the slow change in infectivity from the effect of noise when using the chow test.
+
+## Reconstructing ODE 2nd example.
+
+```{r}
+load("data/second_example_ODE.RData")
+country <- ODE_example
+sims <- 3 #number of "threads" to be optimized
+days <- 55 #number of jumps of the timestep
+
+seeds <- randomLHS(sims, 1)
+seeds <- t(seeds) * c(.5)
+set.seed(476468713)
+pop <- country$popData2020[1]
+
+wl.df <- data.frame()
+
+for(wl in 5:21){
+  seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+  
+  #### Fitting
+  
+  start_0 <- as.Date("2020-02-24")
+  
+  for(i in 0:(days - 1)){
+    start <- start_0 + i
+    end <- start + wl - 1
+    
+    n_start <- which(country$date_new == start)
+    n_end <- which(country$date_new == end)
+    input <- country[n_start:n_end, ]
+    
+    devs <- c()
+    spl <- (input$cases)
+    fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+    devs <- sd(spl - predict(fit)$y)
+    
+    if(devs < .5) devs <- 1
+    
+    temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+    
+    temp <- as.data.frame(temp)
+    colnames(temp) <- c("iota")
+    
+    seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+      temp %>% add_column(day = i)
+    
+    
+    rm(temp)
+    
+  }
+seq_pars <- seq_pars %>% add_column(Window.length = wl)
+  wl.df <- rbind(wl.df, seq_pars)
+}
+
+wl.df <- wl.df %>% unique()
+
+great_idea <- data.frame()
+
+for(i in 1:60){
+  great_idea <- rbind(great_idea, 
+                      wl.df %>% filter(day == i) %>% 
+                        mutate(sum_iotas = iota * Window.length, day_est = day + Window.length,
+                               iota_est = lead(sum_iotas) - sum_iotas))
+  # great_idea <- rbind(great_idea, wl.df %>% mutate(final_day = day + Window.length - 1, sum_iotas = iota * Window.length) %>% filter(final_day == i) %>% mutate(day_est = day, iota_est = lead(sum_iotas) - sum_iotas) %>% select(-final_day))
+}
+
+
+ggplot(great_idea %>% group_by(day_est) %>% summarise(iota = mean(iota_est, na.rm = T)), aes(x = day_est, y = iota)) + 
+  geom_point() + theme_bw()
+
+```
+
+## Chow test
+
+```{r}
+chow.df <- data.frame()
+
+chowchow <- great_idea %>% group_by(day_est) %>% summarise(iota = mean(iota_est, na.rm = T))
+# chowchow <- both.wl.df %>% select(day, Median)
+
+temp2 <- data.frame()
+wl <- 5
+for(i in 11:50){
+    temp_data <- chowchow %>% slice((i - wl - 4):(i + wl - 5))
+    chow <- (sctest(temp_data$iota ~ temp_data$day_est,
+    # chow <- (sctest(temp_data$Median ~ temp_data$day,
+               type = 'Chow', point = (wl)))$statistic
+    temp2 <- rbind(temp2, data.frame(Focal = i, wl = wl, statistic = chow))
+}
+# temp2
+
+ggplot(temp2, aes(x = Focal, y = statistic, color = wl, group = wl)) +
+  geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
+  geom_line() + theme_bw() +
+  # geom_vline(xintercept = 30) +
+  xlab("Day")
+```
+
+
+## Chebyshev + LOLN
+
+```{r}
+
+proc.df <- data.frame()
+daily.df <- data.frame()
+
+for(i in 7:51){
+  proc.df <- rbind(proc.df, great_2nd %>% filter(day_est < i) %>% group_by(day_est) %>% summarise(mean = mean(iota_est, na.rm = T)))
+daily.df <- rbind(daily.df, great_2nd %>% filter(day_est == i) %>% summarise(new = mean(iota_est, na.rm = T)))
+}
+
+proc.df <- proc.df %>% unique()
+proc.df$sd <- NA
+proc.df$estimate <- NA
+
+for(i in 1:45){
+  proc.df$sd[i] <- sd(proc.df$mean[1:i])
+  proc.df$estimate[i] <- mean(proc.df$mean[1:i])
+}
+
+for(i in 21:45){
+  proc.df$sd[i] <- sd(proc.df$mean[18:(i - 1)])
+  proc.df$estimate[i] <- mean(proc.df$mean[18:(i - 1)])
+}
+for(i in 24:45){
+  proc.df$sd[i] <- sd(proc.df$mean[21:(i - 1)])
+  proc.df$estimate[i] <- mean(proc.df$mean[21:(i - 1)])
+}
+for(i in 28:45){
+  proc.df$sd[i] <- sd(proc.df$mean[25:(i - 1)])
+  proc.df$estimate[i] <- mean(proc.df$mean[25:(i - 1)])
+}
+for(i in 31:45){
+  proc.df$sd[i] <- sd(proc.df$mean[28:(i - 1)])
+  proc.df$estimate[i] <- mean(proc.df$mean[28:(i - 1)])
+}
+for(i in 34:45){
+  proc.df$sd[i] <- sd(proc.df$mean[31:(i - 1)])
+  proc.df$estimate[i] <- mean(proc.df$mean[31:(i - 1)])
+}
+proc.df$n_days <- c(1:20, 3:5, 3:6, 3:5, 3:5, 3:14)
+proc.df$UP <- NA
+proc.df$DOWN <- NA
+
+for(i in 2:20){
+  n <- i - 1
+  proc.df$UP[i] <- proc.df$estimate[n] + qt(.975, df = proc.df$n_days[n]) * proc.df$sd[n] / sqrt(proc.df$n_days[n])
+  proc.df$DOWN[i] <- proc.df$estimate[n] - qt(.975, df = proc.df$n_days[n]) * proc.df$sd[n] / sqrt(proc.df$n_days[n])
+}
+proc.df$UP2 <- NA
+proc.df$DOWN2 <- NA
+for(i in 21:23){
+  proc.df$UP2[i] <- proc.df$estimate[i] + qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+  proc.df$DOWN2[i] <- proc.df$estimate[i] - qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+}
+proc.df$UP3 <- NA
+proc.df$DOWN3 <- NA
+for(i in 24:27){
+  proc.df$UP3[i] <- proc.df$estimate[i] + qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+  proc.df$DOWN3[i] <- proc.df$estimate[i] - qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+}
+proc.df$UP4 <- NA
+proc.df$DOWN4 <- NA
+for(i in 28:30){
+  proc.df$UP4[i] <- proc.df$estimate[i] + qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+  proc.df$DOWN4[i] <- proc.df$estimate[i] - qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+}
+proc.df$UP5 <- NA
+proc.df$DOWN5 <- NA
+for(i in 31:33){
+  proc.df$UP5[i] <- proc.df$estimate[i] + qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+  proc.df$DOWN5[i] <- proc.df$estimate[i] - qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+}
+proc.df$UP6 <- NA
+proc.df$DOWN6 <- NA
+for(i in 34:45){
+  proc.df$UP6[i] <- proc.df$estimate[i] + qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+  proc.df$DOWN6[i] <- proc.df$estimate[i] - qt(.975, df = proc.df$n_days[i]) * proc.df$sd[i] / sqrt(proc.df$n_days[i])
+}
+proc.df <- proc.df %>%  
+  add_column(daily.df)
+
+ggplot(proc.df, aes(x = day_est)) + 
+  geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, fill = "lightgrey") +
+  geom_ribbon(aes(ymax = UP, ymin = DOWN), alpha = .5, fill = "red") +
+  geom_ribbon(aes(ymax = UP2, ymin = DOWN2), alpha = .5, fill = "red") +
+  geom_ribbon(aes(ymax = UP3, ymin = DOWN3), alpha = .5, fill = "red") +
+  geom_ribbon(aes(ymax = UP4, ymin = DOWN4), alpha = .5, fill = "red") +
+  geom_ribbon(aes(ymax = UP5, ymin = DOWN5), alpha = .5, fill = "red") +
+  geom_ribbon(aes(ymax = UP6, ymin = DOWN6), alpha = .5, fill = "red") +
+  geom_point(aes(y = new)) +
+  theme_bw() + 
+  scale_y_continuous(limits = c(0, .23)) +
+  theme(aspect.ratio = .618) +
+  ylab("Infectivity rate") + 
+  xlab("Day")
+```
+
+
+## First example
+
+```{r}
+great_idea_1st
+
+proc1.df <- data.frame()
+daily1.df <- data.frame()
+
+for(i in 7:51){
+  proc1.df <- rbind(proc1.df, great_idea_1st %>% filter(day_est < i) %>% group_by(day_est) %>% summarise(mean = mean(iota_est, na.rm = T)))
+daily1.df <- rbind(daily1.df, great_idea_1st %>% filter(day_est == (i)) %>% summarise(new = mean(iota_est, na.rm = T)))
+}
+
+proc1.df <- proc1.df %>% unique()
+proc1.df$sd <- NA
+proc1.df$estimate <- NA
+
+for(i in 1:45){
+  proc1.df$sd[i] <- sd(proc1.df$mean[1:i])
+  proc1.df$estimate[i] <- mean(proc1.df$mean[1:i])
+}
+
+for(i in 27:45){
+  proc1.df$sd[i] <- sd(proc1.df$mean[25:(i)])
+  proc1.df$estimate[i] <- mean(proc1.df$mean[25:(i)])
+}
+
+for(i in 32:45){
+  proc1.df$sd[i] <- sd(proc1.df$mean[29:(i - 1)])
+  proc1.df$estimate[i] <- mean(proc1.df$mean[29:(i - 1)])
+}
+
+for(i in 40:45){
+  proc1.df$sd[i] <- sd(proc1.df$mean[37:(i - 1)])
+  proc1.df$estimate[i] <- mean(proc1.df$mean[37:(i - 1)])
+}
+proc1.df$n_days <- c(1:26, 3:7, 3:10, 3:8)
+proc1.df$UP <- NA
+proc1.df$DOWN <- NA
+
+for(i in 2:26){
+  n <- i - 1
+  proc1.df$UP[i] <- proc1.df$estimate[n] + qt(.975, df = proc1.df$n_days[n]) * proc1.df$sd[n] / sqrt(proc1.df$n_days[n])
+  proc1.df$DOWN[i] <- proc1.df$estimate[n] - qt(.975, df = proc1.df$n_days[n]) * proc1.df$sd[n] / sqrt(proc1.df$n_days[n])
+}
+
+proc1.df$UP2 <- NA
+proc1.df$DOWN2 <- NA
+for(i in 27:31){
+  proc1.df$UP2[i] <- proc1.df$estimate[i] + qt(.975, df = proc1.df$n_days[i]) * proc1.df$sd[i] / sqrt(proc1.df$n_days[i])
+  proc1.df$DOWN2[i] <- proc1.df$estimate[i] - qt(.975, df = proc1.df$n_days[i]) * proc1.df$sd[i] / sqrt(proc1.df$n_days[i])
+}
+
+proc1.df$UP3 <- NA
+proc1.df$DOWN3 <- NA
+for(i in 32:39){
+  proc1.df$UP3[i] <- proc1.df$estimate[i] + qt(.975, df = proc1.df$n_days[i]) * proc1.df$sd[i] / sqrt(proc1.df$n_days[i])
+  proc1.df$DOWN3[i] <- proc1.df$estimate[i] - qt(.975, df = proc1.df$n_days[i]) * proc1.df$sd[i] / sqrt(proc1.df$n_days[i])
+}
+
+proc1.df$UP4 <- NA
+proc1.df$DOWN4 <- NA
+for(i in 40:45){
+  proc1.df$UP4[i] <- proc1.df$estimate[i] + qt(.975, df = proc1.df$n_days[i]) * proc1.df$sd[i] / sqrt(proc1.df$n_days[i])
+  proc1.df$DOWN4[i] <- proc1.df$estimate[i] - qt(.975, df = proc1.df$n_days[i]) * proc1.df$sd[i] / sqrt(proc1.df$n_days[i])
+}
+proc1.df <- proc1.df %>%  
+  add_column(daily1.df)
+
+ggplot(proc1.df, aes(x = day_est +1)) + 
+  geom_vline(xintercept = 30) +
+  geom_ribbon(aes(ymax = UP, ymin = DOWN), alpha = .5, fill = "red") +
+  geom_ribbon(aes(ymax = UP2, ymin = DOWN2), alpha = .5, fill = "red") +
+  geom_ribbon(aes(ymax = UP3, ymin = DOWN3), alpha = .5, fill = "red") +
+  geom_ribbon(aes(ymax = UP4, ymin = DOWN4), alpha = .5, fill = "red") +
+  # geom_ribbon(aes(ymax = UP5, ymin = DOWN5), alpha = .5, fill = "red") +
+  # geom_ribbon(aes(ymax = UP6, ymin = DOWN6), alpha = .5, fill = "red") +
+  # geom_line(aes(y = estimate)) +
+  geom_point(aes(y = new)) +
+  theme_bw() + 
+  scale_y_continuous(limits = c(0, .23)) +
+  theme(aspect.ratio = .618) +
+  ylab("Infectivity rate") + 
+  xlab("Day")
+
+```
+
+## Constant
+
+```{r}
+data <- read.csv("data/artificial220503.csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+selected_country <- "SIRD_SSA-s1_N100000"
+country <-
+  data %>% filter(countriesAndTerritories == selected_country) %>% 
+  select(dateRep, cases, countriesAndTerritories, popData2020, infected, recovered, dead) %>% 
+  mutate(infected = as.numeric(infected), recovered = as.numeric(recovered), 
+         dead = as.numeric(dead), date_new = dmy(dateRep)) %>% arrange(date_new)
+
+sims <- 3 #number of "threads" to be optimized
+days <- 90 #number of jumps of the timestep
+
+seeds <- randomLHS(sims, 1)
+seeds <- t(seeds) * c(.5)
+set.seed(476468713)
+pop <- country$popData2020[1]
+
+wl.df <- data.frame()
+
+for(wl in 5:21){
+  seq_pars <- data.frame(iota = rep(NA, sims*days), day = rep(NA, sims*days))
+  
+  #### Fitting
+  
+  start_0 <- as.Date("2020-02-24")
+  
+  for(i in 0:(days - 1)){
+    start <- start_0 + i
+    end <- start + wl - 1
+    
+    n_start <- which(country$date_new == start)
+    n_end <- which(country$date_new == end)
+    input <- country[n_start:n_end, ]
+    
+    devs <- c()
+    spl <- (input$cases)
+    fit <- smooth.spline(x = 1:nrow(input), y = spl, df = 4)
+    devs <- sd(spl - predict(fit)$y)
+    
+    if(devs < .5) devs <- 1
+    
+    temp <- fitting_procedure(seeds = seeds, fun = ll_ode, data = input, stdev = devs, pop = pop, rho = .03, i_0 = country$infected[n_start - 1], r_0 = country$recovered[n_start - 1] + country$dead[n_start - 1])
+    
+    temp <- as.data.frame(temp)
+    colnames(temp) <- c("iota")
+    
+    seq_pars[(1 + sims * i):(sims + sims * i), ] <-  
+      temp %>% add_column(day = i)
+    
+    
+    rm(temp)
+    
+  }
+seq_pars <- seq_pars %>% add_column(Window.length = wl)
+  wl.df <- rbind(wl.df, seq_pars)
+}
+
+wl.df <- wl.df %>% unique()
+
+ggplot(wl.df, aes(x = day, y = iota, group = Window.length, color = Window.length)) + 
+   # geom_rect(xmin = 22, xmax = 38, ymin = -Inf, ymax = Inf, alpha = .1, color = NA, fill = "grey90") + 
+  geom_vline(xintercept = 30) +
+  geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) +
+  # geom_line(aes(x = day + Window.length), linetype = 2) +
+  xlab("Day") + ylab("Infectivity")
+
+great_cte <- data.frame()
+
+for(i in 1:80){
+  great_cte <- rbind(great_cte, 
+                      wl.df %>% filter(day == i) %>% 
+                        mutate(sum_iotas = iota * Window.length, day_est = day + Window.length,
+                               iota_est = lead(sum_iotas) - sum_iotas))
+  # great_idea <- rbind(great_idea, wl.df %>% mutate(final_day = day + Window.length - 1, sum_iotas = iota * Window.length) %>% filter(final_day == i) %>% mutate(day_est = day, iota_est = lead(sum_iotas) - sum_iotas) %>% select(-final_day))
+}
+
+
+ggplot(great_cte %>% group_by(day_est) %>% summarise(iota = mean(iota_est, na.rm = T)), aes(x = day_est, y = iota)) + 
+  geom_point() + theme_bw()
+
+proccte.df <- data.frame()
+dailycte.df <- data.frame()
+
+for(i in 7:81){
+  proccte.df <- rbind(proccte.df, great_cte %>% filter(day_est < i) %>% group_by(day_est) %>% summarise(mean = mean(iota_est, na.rm = T)))
+dailycte.df <- rbind(dailycte.df, great_cte %>% filter(day_est == (i)) %>% summarise(new = mean(iota_est, na.rm = T)))
+}
+
+proccte.df <- proccte.df %>% unique()
+proccte.df$sd <- NA
+proccte.df$estimate <- NA
+
+for(i in 1:75){
+  proccte.df$sd[i] <- sd(proccte.df$mean[1:i])
+  proccte.df$estimate[i] <- mean(proccte.df$mean[1:i])
+}
+
+for(i in 25:75){
+  proccte.df$sd[i] <- sd(proccte.df$mean[23:(i)])
+  proccte.df$estimate[i] <- mean(proccte.df$mean[23:(i)])
+}
+
+proccte.df$n_days <- c(1:25, 3:52)
+proccte.df$UP <- NA
+proccte.df$DOWN <- NA
+
+for(i in 2:24){
+  n <- i - 1
+  proccte.df$UP[i] <- proccte.df$estimate[n] + qt(.975, df = proccte.df$n_days[n]) * proccte.df$sd[n] / sqrt(proccte.df$n_days[n])
+  proccte.df$DOWN[i] <- proccte.df$estimate[n] - qt(.975, df = proccte.df$n_days[n]) * proccte.df$sd[n] / sqrt(proccte.df$n_days[n])
+}
+
+proccte.df$UP2 <- NA
+proccte.df$DOWN2 <- NA
+
+for(i in 25:75){
+  proccte.df$UP2[i] <- proccte.df$estimate[i] + qt(.975, df = proccte.df$n_days[i]) * proccte.df$sd[i] / sqrt(proccte.df$n_days[i])
+  proccte.df$DOWN2[i] <- proccte.df$estimate[i] - qt(.975, df = proccte.df$n_days[i]) * proccte.df$sd[i] / sqrt(proccte.df$n_days[i])
+}
+
+proccte.df <- proccte.df %>%  
+  add_column(dailycte.df)
+
+ggplot(proccte.df, aes(x = day_est +1)) + 
+  # geom_vline(xintercept = 30) +
+  geom_ribbon(aes(ymax = UP, ymin = DOWN), alpha = .5, fill = "red") +
+  # geom_ribbon(aes(ymax = UP2, ymin = DOWN2), alpha = .5, fill = "red") +
+  # geom_ribbon(aes(ymax = UP3, ymin = DOWN3), alpha = .5, fill = "red") +
+  # geom_ribbon(aes(ymax = UP4, ymin = DOWN4), alpha = .5, fill = "red") +
+  # geom_ribbon(aes(ymax = UP5, ymin = DOWN5), alpha = .5, fill = "red") +
+  # geom_ribbon(aes(ymax = UP6, ymin = DOWN6), alpha = .5, fill = "red") +
+  # geom_line(aes(y = estimate)) +
+  geom_point(aes(y = new)) +
+  theme_bw() + 
+  geom_hline(yintercept = .2, linetype = 2) +
+  # scale_y_continuous(limits = c(0, .5)) +
+  theme(aspect.ratio = .618) +
+  ylab("Infectivity rate") + 
+  xlab("Day")
+```
+

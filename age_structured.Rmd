@@ -696,7 +696,7 @@ data <- read.csv("data/artificial230207_Age2.csv", na.strings = "", fileEncoding
 selected_country <- "SIRDageComplex-IotaScale0.875-S0_SSA-s0_N10000"
 
 sims <- 3 #number of "threads" to be optimized
-days <- 70 #number of jumps of the timestep
+days <- 100 #number of jumps of the timestep
 
 set.seed(476468713)
 
@@ -777,11 +777,62 @@ ggplot(wl.df, aes(x = day, y = iota, group = Window.length, color = Window.lengt
 
 It's more difficult to see the exact day of the lockdown. Factor .875
 
+## Chow once more
+
 ```{r}
-# ggplot(wl.df %>% group_by(day) %>% summarise(sd = sd(iota)), aes(x = day, y = sd)) + 
+
+days <- 70
+
+statistic <- rep(NA, days)
+pval <- rep(NA, days)
+data <- wl.df %>% group_by(day) %>% summarise(sd = sd(iota)) %>% slice(1:days) %>%  as.data.frame()
+
+for(i in 7:(days-6)){
+  statistic[i + 1] <- (sctest(data$sd ~ data$day,
+               type = 'Chow', point = i))$statistic
+  pval[i + 1] <- (sctest(data$sd ~ data$day,
+               type = 'Chow', point = i))$p.value
+}
+
+
+ggplot(data %>% add_column(statistic), aes(x = day, y = sd)) +
+  geom_point() +
+  geom_line(aes(y = statistic/3256), color = 'red') + theme_bw()
+
+# ggplot(wl.df %>% group_by(day) %>% summarise(sd = sd(iota)), aes(x = day, y = sd)) +
 #   geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) +
 #   geom_vline(xintercept = 30)
 ```
+
+Red line - Chow test statistic. Points, sd of the window estimates. 
+
+## Chow test again
+
+```{r}
+days <- 100
+
+statistic <- rep(NA, days)
+pval <- rep(NA, days)
+data <- wl.df %>% group_by(day) %>% summarise(sd = sd(iota)) %>% slice(1:days) %>% as.data.frame()
+
+for(i in 7:(days-6)){
+  statistic[i + 1] <- (sctest(data$sd ~ data$day,
+               type = 'Chow', point = i))$statistic
+  pval[i + 1] <- (sctest(data$sd ~ data$day,
+               type = 'Chow', point = i))$p.value
+}
+
+
+ggplot(data %>% add_column(statistic), aes(x = day, y = sd)) +
+  geom_point() +
+  geom_line(aes(y = statistic/3256), color = 'red') + theme_bw()
+
+# ggplot(wl.df %>% group_by(day) %>% summarise(sd = sd(iota)), aes(x = day, y = sd)) +
+#   geom_line() + theme_bw() + theme(panel.grid.minor = element_blank()) +
+#   geom_vline(xintercept = 30)
+```
+
+Red line - Chow test statistic. Points, sd of the window estimates. 
 
 
 ## More open questions
